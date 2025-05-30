@@ -1,0 +1,97 @@
+name: Sync Releases from Upstream
+
+on:
+  schedule:
+    # 每天检查一次，可以根据需要调整频率
+    - cron: '0 8 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-releases:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout fork repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
+    - name: Setup Git
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+    
+    - name: Add upstream remote
+      run: |
+        git remote add upstream https://github.com/LanYunDev/InjectLib_bak.git
+        git fetch upstream
+    
+    - name: Get latest upstream release
+      id: upstream_release
+      run: |
+        # 获取upstream最新release信息
+        LATEST_RELEASE=$(curl -s https://api.github.com/repos/LanYunDev/InjectLib_bak/releases/latest)
+        echo "tag_name=$(echo $LATEST_RELEASE | jq -r .tag_name)" >> $GITHUB_OUTPUT
+        echo "release_name=$(echo $LATEST_RELEASE | jq -r .name)" >> $GITHUB_OUTPUT
+        echo "body=$(echo $LATEST_RELEASE | jq -r .body)" >> $GITHUB_OUTPUT
+        echo "draft=$(echo $LATEST_RELEASE | jq -r .draft)" >> $GITHUB_OUTPUT
+        echo "prerelease=$(echo $LATEST_RELEASE | jq -r .prerelease)" >> $GITHUB_OUTPUT
+    
+    - name: Check if release exists in fork
+      id: check_release
+      run: |
+        # 检查fork中是否已存在该release
+        if git tag -l | grep -q "^${{ steps.upstream_release.outputs.tag_name }}$"; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Sync tags from upstream
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        git fetch upstream --tags
+        git push origin --tags
+    
+    - name: Create release in fork
+      if: steps.check_release.outputs.exists == 'false'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.upstream_release.outputs.tag_name }}
+        release_name: ${{ steps.upstream_release.outputs.release_name }}
+        body: |
+          🔄 **Auto-synced from upstream repository**
+          
+          ${{ steps.upstream_release.outputs.body }}
+        draft: ${{ steps.upstream_release.outputs.draft }}
+        prerelease: ${{ steps.upstream_release.outputs.prerelease }}
+    
+    # 使用GitHub CLI下载并重新上传assets的方法
+    - name: Install GitHub CLI
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt update
+        sudo apt install gh
+    
+    - name: Download and re-upload release assets
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        # 创建临时目录
+        mkdir -p temp_assets
+        cd temp_assets
+        
+        # 从原仓库下载所有assets
+        gh release download ${{ steps.upstream_release.outputs.tag_name }} --repo LanYunDev/InjectLib_bak
+        
+        # 上传到fork仓库的release
+        gh release upload ${{ steps.upstream_release.outputs.tag_name }} * --repo idewindy/InjectLib_bak
+        
+        cd ..
+        rm -rf temp_assets
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
