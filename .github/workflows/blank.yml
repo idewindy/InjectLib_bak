@@ -32,7 +32,7 @@ jobs:
         
         # 获取所有release标签 (最多100个)
         echo "获取所有releases..."
-        ALL_RELEASES=$(gh release list --repo $UPSTREAM_REPO --limit 100 --json tagName,name,body,isDraft,isPrerelease)
+        ALL_RELEASES=$(gh release list --repo $UPSTREAM_REPO --limit 100 --json tagName,name,isDraft,isPrerelease)
         
         if [ "$ALL_RELEASES" = "[]" ]; then
           echo "没有找到releases"
@@ -63,13 +63,14 @@ jobs:
             continue
           fi
           
-          # 保存body到临时文件
-          echo "$release" | jq -r '.body // ""' > "/tmp/body_${TAG_NAME//\//_}.txt"
+          # 获取详细的release信息（包含body）
+          echo "  📝 获取release详情..."
+          RELEASE_BODY=$(gh release view "$TAG_NAME" --repo $UPSTREAM_REPO --json body --jq '.body // ""')
           
           # 创建同步说明
           echo "🔄 **Auto-synced from upstream repository**" > "/tmp/sync_${TAG_NAME//\//_}.txt"
           echo "" >> "/tmp/sync_${TAG_NAME//\//_}.txt"
-          cat "/tmp/body_${TAG_NAME//\//_}.txt" >> "/tmp/sync_${TAG_NAME//\//_}.txt"
+          echo "$RELEASE_BODY" >> "/tmp/sync_${TAG_NAME//\//_}.txt"
           
           # 构建创建命令
           CREATE_CMD='gh release create "'$TAG_NAME'" --repo "'$FORK_REPO'" --title "'$RELEASE_NAME'" --notes-file "/tmp/sync_'${TAG_NAME//\//_}'.txt"'
@@ -117,7 +118,7 @@ jobs:
           fi
           
           # 清理临时文件
-          rm -f "/tmp/body_${TAG_NAME//\//_}.txt" "/tmp/sync_${TAG_NAME//\//_}.txt"
+          rm -f "/tmp/sync_${TAG_NAME//\//_}.txt"
           
           # 添加延迟避免API限制
           sleep 2
