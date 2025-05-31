@@ -17,83 +17,138 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 0
     
-    - name: Sync releases
+name: Sync All Releases from Upstream
+
+on:
+  schedule:
+    # 每天检查一次
+    - cron: '0 8 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-releases:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
+    - name: Sync all releases
       run: |
         # 设置仓库信息
         UPSTREAM_REPO="LanYunDev/InjectLib_bak"
         FORK_REPO="$GITHUB_REPOSITORY"
         
-        echo "正在同步 $UPSTREAM_REPO 到 $FORK_REPO"
+        echo "正在同步所有releases: $UPSTREAM_REPO 到 $FORK_REPO"
         
         # 添加upstream并获取tags
-        git remote add upstream https://github.com/$UPSTREAM_REPO.git
+        git remote add upstream https://github.com/$UPSTREAM_REPO.git || true
         git fetch upstream --tags
         git push origin --tags
         
-        # 获取最新release信息
-        LATEST_TAG=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName --jq '.[0].tagName')
+        # 获取所有release标签 (最多100个)
+        echo "获取所有releases..."
+        ALL_RELEASES=$(gh release list --repo $UPSTREAM_REPO --limit 100 --json tagName,name,body,isDraft,isPrerelease)
         
-        if [ "$LATEST_TAG" = "null" ] || [ -z "$LATEST_TAG" ]; then
+        if [ "$ALL_RELEASES" = "[]" ]; then
           echo "没有找到releases"
           exit 0
         fi
         
-        echo "最新release: $LATEST_TAG"
+        RELEASE_COUNT=$(echo "$ALL_RELEASES" | jq '. | length')
+        echo "找到 $RELEASE_COUNT 个releases"
         
-        # 检查是否已存在
-        if gh release view "$LATEST_TAG" --repo $FORK_REPO >/dev/null 2>&1; then
-          echo "Release $LATEST_TAG 已存在"
-          exit 0
-        fi
+        # 计数器
+        SUCCESS_COUNT=0
+        SKIP_COUNT=0
+        ERROR_COUNT=0
         
-        # 获取release详细信息
-        RELEASE_INFO=$(gh release view "$LATEST_TAG" --repo $UPSTREAM_REPO --json name,body,isDraft,isPrerelease)
-        RELEASE_NAME=$(echo "$RELEASE_INFO" | jq -r '.name')
-        IS_DRAFT=$(echo "$RELEASE_INFO" | jq -r '.isDraft')
-        IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease')
-        
-        # 保存body到文件以避免特殊字符问题
-        echo "$RELEASE_INFO" | jq -r '.body' > /tmp/release_body.txt
-        
-        # 构建创建命令
-        CREATE_CMD="gh release create '$LATEST_TAG' --repo '$FORK_REPO' --title '$RELEASE_NAME'"
-        
-        # 添加notes
-        echo "🔄 **Auto-synced from upstream repository**" > /tmp/sync_body.txt
-        echo "" >> /tmp/sync_body.txt
-        cat /tmp/release_body.txt >> /tmp/sync_body.txt
-        CREATE_CMD="$CREATE_CMD --notes-file /tmp/sync_body.txt"
-        
-        # 添加flags
-        if [ "$IS_DRAFT" = "true" ]; then
-          CREATE_CMD="$CREATE_CMD --draft"
-        fi
-        
-        if [ "$IS_PRERELEASE" = "true" ]; then
-          CREATE_CMD="$CREATE_CMD --prerelease"
-        fi
-        
-        echo "创建release: $LATEST_TAG"
-        eval $CREATE_CMD
-        
-        # 下载并上传assets
-        echo "处理assets..."
-        mkdir -p /tmp/assets
-        cd /tmp/assets
-        
-        if gh release download "$LATEST_TAG" --repo $UPSTREAM_REPO 2>/dev/null; then
-          if ls ./* >/dev/null 2>&1; then
-            echo "上传assets..."
-            gh release upload "$LATEST_TAG" ./* --repo $FORK_REPO
-            echo "Assets上传完成"
-          else
-            echo "没有assets需要上传"
+        # 处理每个release
+        echo "$ALL_RELEASES" | jq -c '.[]' | while read -r release; do
+          TAG_NAME=$(echo "$release" | jq -r '.tagName')
+          RELEASE_NAME=$(echo "$release" | jq -r '.name')
+          IS_DRAFT=$(echo "$release" | jq -r '.isDraft')
+          IS_PRERELEASE=$(echo "$release" | jq -r '.isPrerelease')
+          
+          echo ""
+          echo "处理 release: $TAG_NAME - $RELEASE_NAME"
+          
+          # 检查是否已存在
+          if gh release view "$TAG_NAME" --repo $FORK_REPO >/dev/null 2>&1; then
+            echo "  ⏭️ 已存在，跳过"
+            continue
           fi
-        else
-          echo "没有assets可下载"
-        fi
+          
+          # 保存body到临时文件
+          echo "$release" | jq -r '.body // ""' > "/tmp/body_${TAG_NAME//\//_}.txt"
+          
+          # 创建同步说明
+          echo "🔄 **Auto-synced from upstream repository**" > "/tmp/sync_${TAG_NAME//\//_}.txt"
+          echo "" >> "/tmp/sync_${TAG_NAME//\//_}.txt"
+          cat "/tmp/body_${TAG_NAME//\//_}.txt" >> "/tmp/sync_${TAG_NAME//\//_}.txt"
+          
+          # 构建创建命令
+          CREATE_CMD='gh release create "'$TAG_NAME'" --repo "'$FORK_REPO'" --title "'$RELEASE_NAME'" --notes-file "/tmp/sync_'${TAG_NAME//\//_}'.txt"'
+          
+          # 添加flags
+          if [ "$IS_DRAFT" = "true" ]; then
+            CREATE_CMD="$CREATE_CMD --draft"
+          fi
+          
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            CREATE_CMD="$CREATE_CMD --prerelease"
+          fi
+          
+          echo "  🆕 创建release..."
+          if eval "$CREATE_CMD"; then
+            echo "  ✅ Release创建成功"
+            
+            # 处理assets
+            echo "  📥 检查assets..."
+            TEMP_DIR="/tmp/assets_${TAG_NAME//\//_}"
+            mkdir -p "$TEMP_DIR"
+            cd "$TEMP_DIR"
+            
+            if gh release download "$TAG_NAME" --repo $UPSTREAM_REPO 2>/dev/null; then
+              if ls ./* >/dev/null 2>&1; then
+                echo "  📤 上传assets..."
+                if gh release upload "$TAG_NAME" ./* --repo $FORK_REPO; then
+                  echo "  ✅ Assets上传成功"
+                else
+                  echo "  ⚠️ Assets上传失败"
+                fi
+              else
+                echo "  ℹ️ 没有assets"
+              fi
+            else
+              echo "  ℹ️ 没有assets可下载"
+            fi
+            
+            # 清理临时目录
+            cd /
+            rm -rf "$TEMP_DIR"
+            
+          else
+            echo "  ❌ Release创建失败"
+          fi
+          
+          # 清理临时文件
+          rm -f "/tmp/body_${TAG_NAME//\//_}.txt" "/tmp/sync_${TAG_NAME//\//_}.txt"
+          
+          # 添加延迟避免API限制
+          sleep 2
+        done
         
-        echo "同步完成: $LATEST_TAG"
+        echo ""
+        echo "========================================"
+        echo "🎉 同步完成！"
+        echo "查看releases: https://github.com/$FORK_REPO/releases"
+        
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
