@@ -1,4 +1,3 @@
-    
 name: Sync All Releases from Upstream
 
 on:
@@ -128,9 +127,6 @@ jobs:
         echo "========================================"
         echo "🎉 同步完成！"
         echo "查看releases: https://github.com/$FORK_REPO/releases"
-        
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
