@@ -1,0 +1,172 @@
+# GitHub CLI (gh) 安装指南
+
+## Ubuntu/Debian
+```bash
+# 方法1：官方推荐
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+sudo apt update
+sudo apt install gh
+
+# 方法2：通过snap
+sudo snap install gh
+```
+
+## CentOS/RHEL/Fedora
+```bash
+# RHEL/CentOS
+sudo dnf install 'dnf-command(config-manager)'
+sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+sudo dnf install gh
+
+# Fedora
+sudo dnf install gh
+```
+
+## macOS
+```bash
+# 使用Homebrew
+brew install gh
+
+# 使用MacPorts
+sudo port install gh
+```
+
+## Windows
+```powershell
+# 使用winget
+winget install --id GitHub.cli
+
+# 使用scoop
+scoop install gh
+
+# 使用Chocolatey
+choco install gh
+```
+
+## 手动安装（所有平台）
+1. 访问 https://github.com/cli/cli/releases
+2. 下载对应平台的二进制文件
+3. 解压并添加到PATH环境变量
+
+## 验证安装
+```bash
+gh --version
+```
+
+## 认证设置
+```bash
+# 登录GitHub账户
+gh auth login
+
+# 查看认证状态
+gh auth status
+```
+
+## 常用命令
+
+### Release相关操作
+```bash
+# 查看所有releases
+gh release list --repo LanYunDev/InjectLib_bak
+
+# 查看特定release
+gh release view v1.0.0 --repo LanYunDev/InjectLib_bak
+
+# 下载release的所有assets
+gh release download v1.0.0 --repo LanYunDev/InjectLib_bak
+
+# 下载特定文件
+gh release download v1.0.0 --pattern "*.zip" --repo LanYunDev/InjectLib_bak
+
+# 创建release
+gh release create v1.0.1 --title "Version 1.0.1" --notes "Release notes"
+
+# 上传文件到release
+gh release upload v1.0.1 file1.zip file2.tar.gz
+```
+
+### 手动同步你的fork仓库releases
+```bash
+# 1. 克隆你的fork仓库
+git clone https://github.com/idewindy/InjectLib_bak.git
+cd InjectLib_bak
+
+# 2. 添加upstream远程仓库
+git remote add upstream https://github.com/LanYunDev/InjectLib_bak.git
+
+# 3. 获取所有tags
+git fetch upstream --tags
+git push origin --tags
+
+# 4. 列出原仓库的所有releases
+gh release list --repo LanYunDev/InjectLib_bak
+
+# 5. 下载特定版本的assets (假设版本是v1.0.0)
+mkdir temp_download
+cd temp_download
+gh release download v1.0.0 --repo LanYunDev/InjectLib_bak
+
+# 6. 在你的fork中创建相同的release
+gh release create v1.0.0 --repo idewindy/InjectLib_bak --title "Version 1.0.0" --notes "Synced from upstream"
+
+# 7. 上传assets到你的release
+gh release upload v1.0.0 * --repo idewindy/InjectLib_bak
+
+# 8. 清理
+cd ..
+rm -rf temp_download
+```
+
+### 批量同步脚本
+```bash
+# 创建一个同步脚本 sync_releases.sh
+#!/bin/bash
+
+UPSTREAM_REPO="LanYunDev/InjectLib_bak"
+FORK_REPO="idewindy/InjectLib_bak"
+
+# 获取upstream的所有release tags
+RELEASES=$(gh release list --repo $UPSTREAM_REPO --json tagName --jq '.[].tagName')
+
+for tag in $RELEASES; do
+    echo "处理 release: $tag"
+    
+    # 检查fork中是否已存在该release
+    if gh release view $tag --repo $FORK_REPO >/dev/null 2>&1; then
+        echo "Release $tag 已存在，跳过"
+        continue
+    fi
+    
+    # 获取release信息
+    RELEASE_INFO=$(gh release view $tag --repo $UPSTREAM_REPO --json name,body)
+    RELEASE_NAME=$(echo $RELEASE_INFO | jq -r '.name')
+    RELEASE_BODY=$(echo $RELEASE_INFO | jq -r '.body')
+    
+    # 下载assets
+    mkdir -p "temp_$tag"
+    cd "temp_$tag"
+    gh release download $tag --repo $UPSTREAM_REPO
+    
+    # 创建release
+    gh release create $tag --repo $FORK_REPO --title "$RELEASE_NAME" --notes "$RELEASE_BODY"
+    
+    # 上传assets（如果有的话）
+    if ls * >/dev/null 2>&1; then
+        gh release upload $tag * --repo $FORK_REPO
+    fi
+    
+    cd ..
+    rm -rf "temp_$tag"
+    
+    echo "Release $tag 同步完成"
+done
+
+echo "所有releases同步完成"
+```
+
+使用脚本：
+```bash
+chmod +x sync_releases.sh
+./sync_releases.sh
+```
